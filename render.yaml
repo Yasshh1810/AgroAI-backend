@@ -1,0 +1,15 @@
+# render.yaml - For deploying to Render
+services:
+  - type: web
+    name: agroai-backend
+    runtime: python
+    repo: https://github.com/YOUR_USERNAME/agroai
+    plan: free
+    envVars:
+      - key: MONGO_URL
+        sync: false
+    buildCommand: |
+      pip install -r requirements.txt
+      # Download a pre-trained model or train on-the-fly
+      # You may need to upload best.pt separately
+    startCommand: uvicorn backend:app --host 0.0.0.0 --port $PORT
