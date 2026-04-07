@@ -235,7 +235,7 @@ async def predict(file: UploadFile = File(...)):
                 "symptoms": "The AI model is not yet loaded. Please ensure 'best.pt' exists.",
                 "treatment": "Train the model using train_tomato_classifier.py",
                 "prevention": "Run training script to generate model file",
-                "annotated_image": None,
+                "annotated_url": f"data:image/jpeg;base64,{img_base64}",
                 "num_boxes": 0
             }
         
