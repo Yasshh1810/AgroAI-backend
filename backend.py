@@ -51,7 +51,6 @@ from ultralytics import YOLO
 
 # Load model with error handling
 MODEL_PATH = "best.pt"
-model = YOLO(MODEL_PATH)
 
 try:
     if os.path.exists(MODEL_PATH):
