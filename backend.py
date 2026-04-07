@@ -51,6 +51,18 @@ from ultralytics import YOLO
 
 # Load model with error handling
 MODEL_PATH = "best.pt"
+model = None
+
+try:
+    if os.path.exists(MODEL_PATH):
+        model = YOLO(MODEL_PATH)
+        logger.info(f"✅ Model loaded from {MODEL_PATH}")
+        logger.info(f"Classes: {model.names}")
+    else:
+        logger.warning(f"⚠️ Model file '{MODEL_PATH}' not found. Running without model.")
+except Exception as e:
+    logger.error(f"❌ Error loading model: {e}")
+    model = None
 
 try:
     if os.path.exists(MODEL_PATH):
