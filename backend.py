@@ -42,7 +42,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
+@app.options("/{full_path:path}")
+async def preflight_handler(full_path: str):
+    return {"message": "OK"}
 # ── Utils ──
 def hash_pw(pw: str) -> str:
     return hashlib.sha256(pw.encode()).hexdigest()
