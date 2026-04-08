@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════
-# AgroAI — backend.py (MongoDB Version)
+# AgroAI — backend.py (FINAL FIXED VERSION)
 # ══════════════════════════════════════════════
 
 from fastapi import FastAPI, HTTPException, File, UploadFile
@@ -9,28 +9,12 @@ import hashlib, os
 from datetime import datetime
 from pymongo import MongoClient
 
-# ── MongoDB Connection ──
-MONGO_URL = os.getenv("MONGO_URL")  # from Render env
-client = MongoClient(MONGO_URL)
-db = client["agroai_db"]
-
-users_col = db["users"]
-detect_col = db["detections"]
-
-# ── YOLO Model ──
-try:
-    from ultralytics import YOLO
-    from PIL import Image
-    import numpy as np, io
-    MODEL = YOLO("best.pt") if os.path.exists("best.pt") else None
-except:
-    MODEL = None
-
+# ── APP ──
 app = FastAPI(title="AgroAI API")
 
-# ── CORS ──
+# ── CORS (FIXED) ──
 origins = [
-    "https://agro-ai-bdu.vercel.app",  # your frontend (IMPORTANT)
+    "https://agro-ai-bdu.vercel.app",
     "http://localhost:3000",
     "http://127.0.0.1:3000"
 ]
@@ -42,9 +26,33 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-@app.options("/{full_path:path}")
-async def preflight_handler(full_path: str):
-    return {"message": "OK"}
+
+# ── MongoDB Connection (SAFE) ──
+MONGO_URL = os.getenv("MONGO_URL")
+
+if not MONGO_URL:
+    raise Exception("❌ MONGO_URL not set in Render environment")
+
+try:
+    client = MongoClient(MONGO_URL)
+    db = client["agroai_db"]
+    users_col = db["users"]
+    detect_col = db["detections"]
+    print("✅ MongoDB Connected")
+except Exception as e:
+    print("❌ MongoDB Connection Failed:", e)
+    raise e
+
+# ── YOLO Model ──
+try:
+    from ultralytics import YOLO
+    from PIL import Image
+    import numpy as np, io
+
+    MODEL = YOLO("best.pt") if os.path.exists("best.pt") else None
+except:
+    MODEL = None
+
 # ── Utils ──
 def hash_pw(pw: str) -> str:
     return hashlib.sha256(pw.encode()).hexdigest()
@@ -80,42 +88,52 @@ class ResetPasswordData(BaseModel):
 
 @app.post("/api/signup")
 def signup(data: SignupData):
-    if len(data.username) < 3:
-        raise HTTPException(400, "Username too short")
-    if len(data.password) < 6:
-        raise HTTPException(400, "Password too short")
+    try:
+        if len(data.username) < 3:
+            raise HTTPException(400, "Username too short")
+        if len(data.password) < 6:
+            raise HTTPException(400, "Password too short")
 
-    if users_col.find_one({"username": data.username}):
-        raise HTTPException(409, "Username already exists")
+        if users_col.find_one({"username": data.username}):
+            raise HTTPException(409, "Username already exists")
 
-    if users_col.find_one({"email": data.email}):
-        raise HTTPException(409, "Email already exists")
+        if users_col.find_one({"email": data.email}):
+            raise HTTPException(409, "Email already exists")
 
-    users_col.insert_one({
-        "username": data.username,
-        "email": data.email,
-        "password": hash_pw(data.password),
-        "created": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    })
+        users_col.insert_one({
+            "username": data.username,
+            "email": data.email,
+            "password": hash_pw(data.password),
+            "created": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        })
 
-    return {"success": True}
+        return {"success": True}
+
+    except Exception as e:
+        print("❌ Signup Error:", e)
+        raise HTTPException(500, "Internal Server Error")
 
 
 @app.post("/api/login")
 def login(data: LoginData):
-    user = users_col.find_one({
-        "username": data.username,
-        "password": hash_pw(data.password)
-    })
+    try:
+        user = users_col.find_one({
+            "username": data.username,
+            "password": hash_pw(data.password)
+        })
 
-    if not user:
-        raise HTTPException(401, "Invalid username or password")
+        if not user:
+            raise HTTPException(401, "Invalid username or password")
 
-    return {
-        "success": True,
-        "username": user["username"],
-        "email": user["email"]
-    }
+        return {
+            "success": True,
+            "username": user["username"],
+            "email": user["email"]
+        }
+
+    except Exception as e:
+        print("❌ Login Error:", e)
+        raise HTTPException(500, "Internal Server Error")
 
 # ══════════════════════════════════════════════
 # DETECTION
@@ -123,36 +141,44 @@ def login(data: LoginData):
 
 @app.post("/api/predict")
 async def predict(file: UploadFile = File(...)):
-    if MODEL is None:
-        import random
-        data = [
-            ("Bacterial Spot","High"),
-            ("Early Blight","Medium"),
-            ("Late Blight","Critical"),
-            ("Healthy","None")
-        ]
-        name, sev = random.choice(data)
-        return {"disease": name, "severity": sev, "confidence": 0.9}
+    try:
+        if MODEL is None:
+            import random
+            data = [
+                ("Bacterial Spot","High"),
+                ("Early Blight","Medium"),
+                ("Late Blight","Critical"),
+                ("Healthy","None")
+            ]
+            name, sev = random.choice(data)
+            return {"disease": name, "severity": sev, "confidence": 0.9}
 
-    contents = await file.read()
-    img = Image.open(io.BytesIO(contents)).convert("RGB")
-    arr = np.array(img)
+        contents = await file.read()
+        from PIL import Image
+        import numpy as np, io
 
-    results = MODEL.predict(arr, conf=0.25, verbose=False)
-    r = results[0]
+        img = Image.open(io.BytesIO(contents)).convert("RGB")
+        arr = np.array(img)
 
-    if r.probs:
-        idx = int(r.probs.top1)
-        conf = float(r.probs.top1conf)
-        label = MODEL.names[idx]
-    else:
-        label, conf = "Healthy", 1.0
+        results = MODEL.predict(arr, conf=0.25, verbose=False)
+        r = results[0]
 
-    return {
-        "disease": label,
-        "severity": "Medium",
-        "confidence": round(conf, 4)
-    }
+        if r.probs:
+            idx = int(r.probs.top1)
+            conf = float(r.probs.top1conf)
+            label = MODEL.names[idx]
+        else:
+            label, conf = "Healthy", 1.0
+
+        return {
+            "disease": label,
+            "severity": "Medium",
+            "confidence": round(conf, 4)
+        }
+
+    except Exception as e:
+        print("❌ Predict Error:", e)
+        raise HTTPException(500, "Prediction failed")
 
 # ══════════════════════════════════════════════
 # HISTORY
@@ -160,30 +186,41 @@ async def predict(file: UploadFile = File(...)):
 
 @app.post("/api/save-detection")
 def save_detection(data: DetectionSave):
-    detect_col.insert_one({
-        "username": data.username,
-        "disease": data.disease,
-        "confidence": data.confidence,
-        "severity": data.severity,
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    })
-    return {"success": True}
+    try:
+        detect_col.insert_one({
+            "username": data.username,
+            "disease": data.disease,
+            "confidence": data.confidence,
+            "severity": data.severity,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        })
+        return {"success": True}
+    except Exception as e:
+        print("❌ Save Error:", e)
+        raise HTTPException(500, "Save failed")
 
 
 @app.get("/api/history/{username}")
 def get_history(username: str):
-    rows = list(detect_col.find(
-        {"username": username},
-        {"_id": 0}
-    ).sort("timestamp", -1).limit(50))
+    try:
+        rows = list(detect_col.find(
+            {"username": username},
+            {"_id": 0}
+        ).sort("timestamp", -1).limit(50))
 
-    return {"history": rows}
+        return {"history": rows}
+    except Exception as e:
+        print("❌ History Error:", e)
+        return {"history": []}
 
 
 @app.delete("/api/history/{username}")
 def clear_history(username: str):
-    detect_col.delete_many({"username": username})
-    return {"success": True}
+    try:
+        detect_col.delete_many({"username": username})
+        return {"success": True}
+    except:
+        raise HTTPException(500, "Delete failed")
 
 # ══════════════════════════════════════════════
 # FORGOT PASSWORD
@@ -217,4 +254,4 @@ def reset_password(data: ResetPasswordData):
 
 @app.get("/")
 def home():
-    return {"status": "AgroAI MongoDB backend running"}
+    return {"status": "AgroAI MongoDB backend running 🚀"}
