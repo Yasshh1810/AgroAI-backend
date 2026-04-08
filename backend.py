@@ -1,8 +1,7 @@
 # ══════════════════════════════════════════════
 #  AgroAI — backend.py
 #  FastAPI + SQLite  |  Login / Signup / Detect
-#  Model: best.pt (YOLOv8n-cls — 10 tomato classes)
-#  Run: python start.py
+#  Run: uvicorn backend:app --reload
 # ══════════════════════════════════════════════
 
 from fastapi import FastAPI, HTTPException, File, UploadFile
@@ -13,24 +12,18 @@ from pydantic import BaseModel
 import sqlite3, hashlib, os
 from datetime import datetime
 
-# ── Load YOLO model (best.pt must be in same folder) ──
+# ── optional: load YOLO if best.pt exists ──
 try:
     from ultralytics import YOLO
     from PIL import Image
     import numpy as np, io
-    _pt = os.path.join(os.path.dirname(__file__), "best.pt")
-    MODEL = YOLO(_pt) if os.path.exists(_pt) else None
-    if MODEL:
-        print(f"✅  Model loaded: {_pt}")
-    else:
-        print("⚠️   best.pt not found — running in DEMO mode")
+    MODEL = YOLO("best.pt") if os.path.exists("best.pt") else None
 except ImportError:
     MODEL = None
-    print("⚠️   ultralytics not installed — running in DEMO mode")
 
-app = FastAPI(title="AgroAI API", version="1.0.0")
+app = FastAPI(title="AgroAI API")
 
-# ── CORS ──
+# ── CORS (allow frontend to talk to backend) ──
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -39,9 +32,9 @@ app.add_middleware(
 )
 
 # ══════════════════════════════════════════════
-#  DATABASE
+#  DATABASE SETUP
 # ══════════════════════════════════════════════
-DB = os.path.join(os.path.dirname(__file__), "agroai.db")
+DB = "agroai.db"
 
 def get_conn():
     conn = sqlite3.connect(DB)
@@ -58,6 +51,7 @@ def init_db():
             password  TEXT    NOT NULL,
             created   TEXT    NOT NULL
         );
+
         CREATE TABLE IF NOT EXISTS detections (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             username   TEXT NOT NULL,
@@ -93,13 +87,6 @@ class DetectionSave(BaseModel):
     confidence: float
     severity:   str
 
-class VerifyEmailData(BaseModel):
-    email: str
-
-class ResetPasswordData(BaseModel):
-    email:        str
-    new_password: str
-
 # ══════════════════════════════════════════════
 #  AUTH ROUTES
 # ══════════════════════════════════════════════
@@ -112,6 +99,7 @@ def signup(data: SignupData):
         raise HTTPException(400, "Password must be at least 6 characters.")
     if "@" not in data.email:
         raise HTTPException(400, "Enter a valid email address.")
+
     conn = get_conn()
     try:
         conn.execute(
@@ -135,8 +123,10 @@ def login(data: LoginData):
         (data.username.strip(), hash_pw(data.password))
     ).fetchone()
     conn.close()
+
     if not row:
         raise HTTPException(401, "Invalid username or password.")
+
     return {
         "success":  True,
         "username": row["username"],
@@ -145,44 +135,55 @@ def login(data: LoginData):
     }
 
 # ══════════════════════════════════════════════
-#  DETECTION
+#  DETECTION ROUTES
 # ══════════════════════════════════════════════
-
-# Maps YOLOv8 class names → (display label, severity)
-SEVERITY_MAP = {
-    "Tomato_Bacterial_spot":                       ("Bacterial Spot",         "High"),
-    "Tomato_Early_blight":                         ("Early Blight",           "Medium"),
-    "Tomato_Late_blight":                          ("Late Blight",            "Critical"),
-    "Tomato_Leaf_Mold":                            ("Leaf Mold",              "Medium"),
-    "Tomato_Septoria_leaf_spot":                   ("Septoria Leaf Spot",     "Medium"),
-    "Tomato_Spider_mites Two-spotted_spider_mite": ("Spider Mites",           "Low"),
-    "Tomato__Target_Spot":                         ("Target Spot",            "Medium"),
-    "Tomato__Tomato_YellowLeaf__Curl_Virus":       ("Yellow Leaf Curl Virus", "Critical"),
-    "Tomato__Tomato_mosaic_virus":                 ("Tomato Mosaic Virus",    "High"),
-    "Tomato_healthy":                              ("Healthy",                "None"),
-}
 
 @app.post("/api/predict")
 async def predict(file: UploadFile = File(...)):
-    """YOLOv8 inference. Falls back to demo if best.pt not found."""
-
+    """
+    Real YOLOv8 inference.
+    Falls back to demo result if best.pt is not present.
+    """
     if MODEL is None:
-        # Demo fallback
+        # Demo fallback — replace with real model later
         import random
-        options = list(SEVERITY_MAP.values())
-        label, sev = random.choice(options)
+        NAMES = [
+            ("Bacterial Spot",        "High"),
+            ("Early Blight",          "Medium"),
+            ("Late Blight",           "Critical"),
+            ("Leaf Mold",             "Medium"),
+            ("Septoria Leaf Spot",    "Medium"),
+            ("Spider Mites",          "Low"),
+            ("Target Spot",           "Medium"),
+            ("Yellow Leaf Curl Virus","Critical"),
+            ("Tomato Mosaic Virus",   "High"),
+            ("Healthy",               "None"),
+        ]
+        name, sev = random.choice(NAMES)
         conf = round(random.uniform(0.72, 0.99), 4)
-        return {"disease": label, "severity": sev, "confidence": conf, "mode": "demo"}
+        return {"disease": name, "severity": sev, "confidence": conf}
 
     # Real inference
     contents = await file.read()
     img      = Image.open(io.BytesIO(contents)).convert("RGB")
     arr      = np.array(img)
-    results  = MODEL.predict(arr, conf=0.1, verbose=False)
+    results  = MODEL.predict(arr, conf=0.25, verbose=False)
     r        = results[0]
 
+    SEVERITY_MAP = {
+        "Tomato_Bacterial_spot":                        ("Bacterial Spot",         "High"),
+        "Tomato_Early_blight":                          ("Early Blight",           "Medium"),
+        "Tomato_Late_blight":                           ("Late Blight",            "Critical"),
+        "Tomato_Leaf_Mold":                             ("Leaf Mold",              "Medium"),
+        "Tomato_Septoria_leaf_spot":                    ("Septoria Leaf Spot",     "Medium"),
+        "Tomato_Spider_mites Two-spotted_spider_mite":  ("Spider Mites",           "Low"),
+        "Tomato__Target_Spot":                          ("Target Spot",            "Medium"),
+        "Tomato__Tomato_YellowLeaf__Curl_Virus":        ("Yellow Leaf Curl Virus", "Critical"),
+        "Tomato__Tomato_mosaic_virus":                  ("Tomato Mosaic Virus",    "High"),
+        "Tomato_healthy":                               ("Healthy",                "None"),
+    }
+
     if r.probs is not None:
-        # Classification model
         idx  = int(r.probs.top1)
         conf = float(r.probs.top1conf)
         key  = MODEL.names[idx]
@@ -195,12 +196,7 @@ async def predict(file: UploadFile = File(...)):
         key, conf = "Tomato_healthy", 1.0
 
     label, severity = SEVERITY_MAP.get(key, (key, "Medium"))
-    return {
-        "disease":    label,
-        "severity":   severity,
-        "confidence": round(conf, 4),
-        "mode":       "model"
-    }
+    return {"disease": label, "severity": severity, "confidence": round(conf, 4)}
 
 
 @app.post("/api/save-detection")
@@ -237,6 +233,16 @@ def clear_history(username: str):
     return {"success": True}
 
 
+
+
+# ══ FORGOT PASSWORD ══
+class VerifyEmailData(BaseModel):
+    email: str
+
+class ResetPasswordData(BaseModel):
+    email:        str
+    new_password: str
+
 @app.post("/api/verify-email")
 def verify_email(data: VerifyEmailData):
     conn = get_conn()
@@ -245,7 +251,6 @@ def verify_email(data: VerifyEmailData):
     if not row:
         raise HTTPException(404, "No account found with this email address.")
     return {"success": True}
-
 
 @app.post("/api/reset-password")
 def reset_password(data: ResetPasswordData):
@@ -259,6 +264,6 @@ def reset_password(data: ResetPasswordData):
         raise HTTPException(404, "Email not found.")
     return {"success": True, "message": "Password reset successfully."}
 
+# ── Serve frontend files ──
+app.mount("/", StaticFiles(directory=".", html=True), name="static")
 
-# ── Serve frontend static files ──
-app.mount("/", StaticFiles(directory=os.path.dirname(__file__), html=True), name="static")
