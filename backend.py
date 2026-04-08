@@ -182,7 +182,13 @@ async def predict(file: UploadFile = File(...)):
     contents = await file.read()
     img      = Image.open(io.BytesIO(contents)).convert("RGB")
     arr      = np.array(img)
-    results  = MODEL.predict(arr, conf=0.25, verbose=False)
+    results = MODEL.predict(
+    arr,
+    imgsz=416,      # 🔥 smaller = faster
+    conf=0.3,
+    device='cpu',
+    verbose=False
+)
     r        = results[0]
 
     SEVERITY_MAP = {
