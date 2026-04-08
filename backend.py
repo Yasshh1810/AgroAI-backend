@@ -12,21 +12,29 @@ from pydantic import BaseModel
 import sqlite3, hashlib, os
 from datetime import datetime
 
-# ── optional: load YOLO if best.pt exists ──
+# ── Load YOLO model ──
 try:
     from ultralytics import YOLO
     from PIL import Image
     import numpy as np, io
-    MODEL = YOLO("best.pt") if os.path.exists("best.pt") else None
-except ImportError:
-    MODEL = MODEL = YOLO(_pt) if os.path.exists(_pt) else None
-    if MODEL:
-        print(f"✅  Model loaded: {_pt}")
+
+    if os.path.exists("best.pt"):
+        MODEL = YOLO("best.pt")
+        print("✅ Model loaded: best.pt")
+
+        # 🔥 Warmup (ADD HERE)
+        print("🔥 Warming up model...")
+        dummy = np.zeros((640, 640, 3), dtype=np.uint8)
+        MODEL.predict(dummy, verbose=False)
+        print("✅ Model ready!")
+
     else:
-        print("⚠️   best.pt not found — running in DEMO mode")
+        MODEL = None
+        print("⚠️ best.pt not found — running in DEMO mode")
+
 except ImportError:
     MODEL = None
-    print("⚠️   ultralytics not installed — running in DEMO mode")
+    print("⚠️ ultralytics not installed — running in DEMO mode")
 
 app = FastAPI(title="AgroAI API")
 
