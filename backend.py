@@ -19,7 +19,14 @@ try:
     import numpy as np, io
     MODEL = YOLO("best.pt") if os.path.exists("best.pt") else None
 except ImportError:
+    MODEL = MODEL = YOLO(_pt) if os.path.exists(_pt) else None
+    if MODEL:
+        print(f"✅  Model loaded: {_pt}")
+    else:
+        print("⚠️   best.pt not found — running in DEMO mode")
+except ImportError:
     MODEL = None
+    print("⚠️   ultralytics not installed — running in DEMO mode")
 
 app = FastAPI(title="AgroAI API")
 
