@@ -1,3 +1,9 @@
+# Use CPU-only version for Render free tier
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.0.1
+torchvision==0.15.2
+
+# Other dependencies
 fastapi==0.104.1
 uvicorn==0.24.0
 python-multipart==0.0.6
