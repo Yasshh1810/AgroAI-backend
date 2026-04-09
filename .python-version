@@ -1,0 +1,2 @@
+# Create this file in your backend repository root
+echo "3.11.9" > .python-version
