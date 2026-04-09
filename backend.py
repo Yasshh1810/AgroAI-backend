@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════
-#  AgroAI — backend.py (Production Ready with Render fixes)
+#  AgroAI — backend.py (Production Ready with CORS Fix)
 # ══════════════════════════════════════════════
 
 from fastapi import FastAPI, HTTPException, File, UploadFile, Depends
@@ -63,13 +63,35 @@ SECRET_KEY = os.getenv("SECRET_KEY", str(uuid.uuid4()))
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
 
-# ── CORS Configuration ──
+# ── CORS Configuration (FIXED) ──
+# Allow your Vercel frontend explicitly
+ALLOWED_ORIGINS = [
+    "https://agro-ai-bdu.vercel.app",
+    "https://agro-ai-bdu.vercel.app",
+    "http://localhost:3000",
+    "http://localhost:8000",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:8000",
+]
+
+# Also check environment variable
+env_origins = os.getenv("ALLOWED_ORIGINS", "")
+if env_origins:
+    ALLOWED_ORIGINS.extend([origin.strip() for origin in env_origins.split(",")])
+
+# Remove duplicates
+ALLOWED_ORIGINS = list(set(ALLOWED_ORIGINS))
+
+logger.info(f"CORS allowed origins: {ALLOWED_ORIGINS}")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("ALLOWED_ORIGINS", "*").split(","),
+    allow_origins=ALLOWED_ORIGINS,  # Use explicit list instead of "*"
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=3600,  # Cache preflight requests for 1 hour
 )
 
 # ══════════════════════════════════════════════
@@ -419,7 +441,7 @@ async def health_check():
 #  AUTHENTICATION ENDPOINTS
 # ══════════════════════════════════════════════
 
-@app.post("/api/signup", response_model=Dict[str, Any])
+@app.post("/api/signup")
 async def signup(data: SignupData):
     """Create a new user account"""
     # Validate input
@@ -453,7 +475,7 @@ async def signup(data: SignupData):
         "email": data.email.strip()
     }
 
-@app.post("/api/login", response_model=Dict[str, Any])
+@app.post("/api/login")
 async def login(data: LoginData):
     """Authenticate user and return token"""
     user = find_user_by_username(data.username.strip())
@@ -502,7 +524,7 @@ async def logout(username: str = Depends(verify_token)):
 #  PREDICTION ENDPOINTS
 # ══════════════════════════════════════════════
 
-@app.post("/api/predict", response_model=PredictionResponse)
+@app.post("/api/predict")
 async def predict(
     file: UploadFile = File(...),
     username: Optional[str] = None
@@ -519,14 +541,14 @@ async def predict(
     if MODEL is None:
         logger.warning(f"Prediction fallback: Model not loaded. Error: {MODEL_LOAD_ERROR}")
         # Return demo response
-        return PredictionResponse(
-            disease="Early Blight",
-            severity="Medium",
-            confidence=0.85,
-            treatment="Apply fungicide and remove affected leaves",
-            raw_class="Tomato_Early_blight",
-            mode="demo_fallback"
-        )
+        return {
+            "disease": "Early Blight",
+            "severity": "Medium",
+            "confidence": 0.85,
+            "treatment": "Apply fungicide and remove affected leaves",
+            "raw_class": "Tomato_Early_blight",
+            "mode": "demo_fallback"
+        }
     
     try:
         from PIL import Image
@@ -575,14 +597,14 @@ async def predict(
         if username:
             save_detection(username, disease_name, confidence, severity, treatment)
         
-        return PredictionResponse(
-            disease=disease_name,
-            severity=severity,
-            confidence=round(confidence, 4),
-            treatment=treatment,
-            raw_class=class_name,
-            mode="model"
-        )
+        return {
+            "disease": disease_name,
+            "severity": severity,
+            "confidence": round(confidence, 4),
+            "treatment": treatment,
+            "raw_class": class_name,
+            "mode": "model"
+        }
         
     except Exception as e:
         logger.error(f"Prediction error: {e}")
