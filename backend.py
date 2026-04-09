@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════
-#  AgroAI — backend.py (Fixed for PyTorch 2.6+)
+#  AgroAI — backend.py (Fixed Model Loading)
 # ══════════════════════════════════════════════
 
 from fastapi import FastAPI, HTTPException, File, UploadFile
@@ -10,22 +10,23 @@ import hashlib
 import os
 import io
 import sys
+import random
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# ── Fix for PyTorch weights_only issue ──
-import torch
-import torch.serialization
+app = FastAPI(title="AgroAI API")
 
-# Allow safe globals for YOLO model loading
-try:
-    from ultralytics.nn.tasks import ClassificationModel, DetectionModel
-    torch.serialization.add_safe_globals([ClassificationModel, DetectionModel])
-except:
-    pass
+# ── CORS ──
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# ── MongoDB Setup with fallback ──
+# ── MongoDB Setup ──
 MONGODB_URI = os.getenv("MONGODB_URI", "")
 users_collection = None
 detections_collection = None
@@ -39,7 +40,6 @@ try:
         db = client["agroai_db"]
         users_collection = db["users"]
         detections_collection = db["detections"]
-        # Create indexes
         users_collection.create_index("username", unique=True)
         users_collection.create_index("email", unique=True)
         print("✅ MongoDB connected")
@@ -48,50 +48,86 @@ try:
 except Exception as e:
     print(f"⚠️ MongoDB error: {e}, using in-memory storage")
 
-# ── Load YOLO model with weights_only fix ──
+# ── Load YOLO model with proper error handling ──
 MODEL = None
+MODEL_LOAD_ERROR = None
+
 try:
     from ultralytics import YOLO
-    from PIL import Image
-    import numpy as np
     
     MODEL_PATH = "best.pt"
-    if os.path.exists(MODEL_PATH):
-        # Load with weights_only=False to bypass the security restriction
-        # This is safe because we trust the model file
-        MODEL = YOLO(MODEL_PATH, task='classify')
-        print(f"✅ Model loaded: {MODEL_PATH}")
-        
-        # Test the model with a dummy input to verify it works
-        try:
-            dummy = np.zeros((640, 640, 3), dtype=np.uint8)
-            _ = MODEL.predict(dummy, verbose=False)
-            print("✅ Model validation passed")
-        except Exception as e:
-            print(f"⚠️ Model validation warning: {e}")
+    
+    # Check if file exists
+    if not os.path.exists(MODEL_PATH):
+        print(f"⚠️ Model file not found at: {os.path.abspath(MODEL_PATH)}")
+        MODEL_LOAD_ERROR = "Model file not found"
     else:
-        print("⚠️ best.pt not found — running in DEMO mode")
+        # Get file size
+        file_size = os.path.getsize(MODEL_PATH) / (1024 * 1024)  # MB
+        print(f"📁 Model file size: {file_size:.2f} MB")
+        
+        # Check if file is too small (corrupted)
+        if file_size < 1:
+            print(f"⚠️ Model file seems corrupted (too small)")
+            MODEL_LOAD_ERROR = "Model file corrupted (too small)"
+        else:
+            # Load the model
+            print("🔄 Loading YOLO model...")
+            MODEL = YOLO(MODEL_PATH)
+            print("✅ Model loaded successfully")
+            
+            # Test the model with a dummy image
+            try:
+                import numpy as np
+                from PIL import Image
+                dummy = np.zeros((224, 224, 3), dtype=np.uint8)
+                test_result = MODEL.predict(dummy, verbose=False)
+                print("✅ Model validation passed")
+            except Exception as e:
+                print(f"⚠️ Model validation warning: {e}")
+                
 except ImportError as e:
-    print(f"⚠️ ultralytics not installed: {e} — running in DEMO mode")
+    print(f"⚠️ ultralytics not installed: {e}")
+    MODEL_LOAD_ERROR = "ultralytics not installed"
 except Exception as e:
-    print(f"⚠️ Model loading error: {e} — running in DEMO mode")
-    MODEL = None
+    print(f"⚠️ Model loading error: {e}")
+    MODEL_LOAD_ERROR = str(e)
 
-app = FastAPI(title="AgroAI API")
+# ─── Disease mapping (exact match for YOLO class names) ───
+DISEASE_MAP = {
+    "Tomato_Bacterial_spot": ("Bacterial Spot", "High"),
+    "Tomato_Early_blight": ("Early Blight", "Medium"),
+    "Tomato_Late_blight": ("Late Blight", "Critical"),
+    "Tomato_Leaf_Mold": ("Leaf Mold", "Medium"),
+    "Tomato_Septoria_leaf_spot": ("Septoria Leaf Spot", "Medium"),
+    "Tomato_Spider_mites Two-spotted_spider_mite": ("Spider Mites", "Low"),
+    "Tomato_Target_Spot": ("Target Spot", "Medium"),
+    "Tomato__Target_Spot": ("Target Spot", "Medium"),
+    "Tomato_Yellow_Leaf_Curl_Virus": ("Yellow Leaf Curl Virus", "Critical"),
+    "Tomato__Tomato_YellowLeaf__Curl_Virus": ("Yellow Leaf Curl Virus", "Critical"),
+    "Tomato_Mosaic_Virus": ("Tomato Mosaic Virus", "High"),
+    "Tomato__Tomato_mosaic_virus": ("Tomato Mosaic Virus", "High"),
+    "Tomato_healthy": ("Healthy", "None"),
+}
 
-# ── CORS ──
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+def get_disease_info(class_name):
+    """Get disease info from class name with fallback"""
+    if class_name in DISEASE_MAP:
+        return DISEASE_MAP[class_name]
+    
+    # Try to clean up the class name
+    cleaned = class_name.replace("__", "_").replace("_", " ").strip()
+    for key, value in DISEASE_MAP.items():
+        if key.replace("_", " ") in cleaned or cleaned in key:
+            return value
+    
+    # Default fallback
+    return (cleaned, "Medium")
 
+# ─── Helper functions ───
 def hash_pw(pw: str) -> str:
     return hashlib.sha256(pw.encode()).hexdigest()
 
-# ─── Database helper functions ───
 def save_user(username: str, email: str, password_hash: str):
     if users_collection:
         users_collection.insert_one({
@@ -131,7 +167,7 @@ def update_user_password(email: str, new_password_hash: str):
         )
         return result.modified_count > 0
     else:
-        for username, user in in_memory_users.items():
+        for user in in_memory_users.values():
             if user["email"] == email:
                 user["password"] = new_password_hash
                 return True
@@ -192,35 +228,6 @@ class ResetPasswordData(BaseModel):
     email: str
     new_password: str
 
-# ─── Disease mapping ───
-SEVERITY_MAP = {
-    "Tomato_Bacterial_spot": ("Bacterial Spot", "High"),
-    "Tomato_Early_blight": ("Early Blight", "Medium"),
-    "Tomato_Late_blight": ("Late Blight", "Critical"),
-    "Tomato_Leaf_Mold": ("Leaf Mold", "Medium"),
-    "Tomato_Septoria_leaf_spot": ("Septoria Leaf Spot", "Medium"),
-    "Tomato_Spider_mites_Two-spotted_spider_mite": ("Spider Mites", "Low"),
-    "Tomato_Target_Spot": ("Target Spot", "Medium"),
-    "Tomato_Yellow_Leaf_Curl_Virus": ("Yellow Leaf Curl Virus", "Critical"),
-    "Tomato_Mosaic_Virus": ("Tomato Mosaic Virus", "High"),
-    "Tomato_healthy": ("Healthy", "None"),
-}
-
-# Alternative mapping for different naming conventions
-ALTERNATIVE_MAP = {
-    "Tomato_Spider_mites Two-spotted_spider_mite": ("Spider Mites", "Low"),
-    "Tomato__Target_Spot": ("Target Spot", "Medium"),
-    "Tomato__Tomato_YellowLeaf__Curl_Virus": ("Yellow Leaf Curl Virus", "Critical"),
-    "Tomato__Tomato_mosaic_virus": ("Tomato Mosaic Virus", "High"),
-}
-
-def get_disease_info(key):
-    if key in SEVERITY_MAP:
-        return SEVERITY_MAP[key]
-    if key in ALTERNATIVE_MAP:
-        return ALTERNATIVE_MAP[key]
-    return (key.replace("_", " "), "Medium")
-
 # ─── API Routes ───
 @app.get("/")
 def root():
@@ -231,7 +238,8 @@ def health_check():
     return {
         "status": "ok",
         "mongodb": users_collection is not None,
-        "model": MODEL is not None,
+        "model_loaded": MODEL is not None,
+        "model_error": MODEL_LOAD_ERROR,
         "python_version": sys.version
     }
 
@@ -265,57 +273,86 @@ def login(data: LoginData):
 
 @app.post("/api/predict")
 async def predict(file: UploadFile = File(...)):
-    import random
+    """YOLOv8 inference with consistent results"""
     
+    # Check if model is loaded
     if MODEL is None:
-        # Demo mode
-        options = list(SEVERITY_MAP.values())
-        weights = [0.3 if opt[0] == "Healthy" else 0.7/9 for opt in options]
-        label, sev = random.choices(options, weights=weights)[0]
-        conf = round(random.uniform(0.75, 0.98), 4)
-        return {"disease": label, "severity": sev, "confidence": conf, "mode": "demo"}
+        print(f"⚠️ Prediction fallback: Model not loaded. Error: {MODEL_LOAD_ERROR}")
+        # Return a consistent fallback response
+        return {
+            "disease": "Early Blight",
+            "severity": "Medium", 
+            "confidence": 0.85,
+            "mode": "demo_fallback",
+            "warning": "Model not loaded - using demo mode"
+        }
 
     try:
         from PIL import Image
         import numpy as np
         
+        # Read and process image
         contents = await file.read()
         img = Image.open(io.BytesIO(contents)).convert("RGB")
+        
+        # Resize to consistent size for better results
+        img = img.resize((224, 224))
         arr = np.array(img)
         
-        # Run prediction
-        results = MODEL.predict(arr, conf=0.1, verbose=False)
+        # Run prediction with consistent settings
+        results = MODEL.predict(
+            arr, 
+            conf=0.25,  # Confidence threshold
+            iou=0.45,   # IoU threshold
+            verbose=False
+        )
+        
+        if not results:
+            raise Exception("No prediction results")
+        
         r = results[0]
-
+        
+        # Extract prediction
         if r.probs is not None:
             # Classification model
-            idx = int(r.probs.top1)
-            conf = float(r.probs.top1conf)
-            key = MODEL.names[idx]
+            probs = r.probs.data.cpu().numpy()
+            top1_idx = int(r.probs.top1)
+            confidence = float(r.probs.top1conf)
+            class_name = MODEL.names[top1_idx]
+            
+            # Log for debugging
+            print(f"Predicted: {class_name} with confidence {confidence:.3f}")
+            
         elif r.boxes and len(r.boxes) > 0:
-            # Detection model
-            best = int(r.boxes.conf.argmax())
-            idx = int(r.boxes.cls[best])
-            conf = float(r.boxes.conf[best])
-            key = MODEL.names[idx]
+            # Detection model - get highest confidence box
+            best_idx = int(r.boxes.conf.argmax())
+            confidence = float(r.boxes.conf[best_idx])
+            class_id = int(r.boxes.cls[best_idx])
+            class_name = MODEL.names[class_id]
+            
+            print(f"Predicted (detection): {class_name} with confidence {confidence:.3f}")
         else:
-            key, conf = "Tomato_healthy", 0.95
-
-        label, severity = get_disease_info(key)
+            # Default fallback
+            class_name = "Tomato_healthy"
+            confidence = 0.95
+            print("No boxes found, defaulting to healthy")
+        
+        # Get disease info
+        disease_name, severity = get_disease_info(class_name)
+        
         return {
-            "disease": label,
+            "disease": disease_name,
             "severity": severity,
-            "confidence": round(conf, 4),
+            "confidence": round(confidence, 4),
             "mode": "model",
-            "raw_class": key
+            "raw_class": class_name
         }
+        
     except Exception as e:
         print(f"Prediction error: {e}")
-        # Fallback to demo mode on error
-        options = list(SEVERITY_MAP.values())
-        label, sev = random.choice(options)
-        conf = round(random.uniform(0.75, 0.98), 4)
-        return {"disease": label, "severity": sev, "confidence": conf, "mode": "demo_fallback"}
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"Prediction error: {str(e)}")
 
 @app.post("/api/save-detection")
 def save_detection(data: DetectionSave):
