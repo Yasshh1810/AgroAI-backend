@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════
-#  AgroAI — backend.py (Production Ready)
+#  AgroAI — backend.py (Production Ready with Render fixes)
 # ══════════════════════════════════════════════
 
 from fastapi import FastAPI, HTTPException, File, UploadFile, Depends
@@ -20,6 +20,16 @@ from contextlib import contextmanager
 
 # Load environment variables
 load_dotenv()
+
+# ══════════════════════════════════════════════
+#  ENVIRONMENT CONFIGURATION (Must be at top)
+# ══════════════════════════════════════════════
+
+# Set environment for CPU-only (important for Render)
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+
+# Check if we're on Render
+IS_RENDER = os.environ.get('RENDER', False)
 
 # ══════════════════════════════════════════════
 #  LOGGING CONFIGURATION
@@ -103,7 +113,7 @@ except Exception as e:
     logger.warning(f"⚠️ MongoDB connection failed: {e}, using in-memory storage")
 
 # ══════════════════════════════════════════════
-#  YOLO MODEL LOADING with retry logic
+#  YOLO MODEL LOADING with enhanced Render support
 # ══════════════════════════════════════════════
 
 MODEL = None
@@ -111,12 +121,21 @@ MODEL_LOAD_ERROR = None
 MODEL_PATH = os.getenv("MODEL_PATH", "best.pt")
 
 def load_model():
-    """Load YOLO model with proper error handling"""
+    """Load YOLO model with proper error handling and CPU optimization for Render"""
     global MODEL, MODEL_LOAD_ERROR
+    
+    # Check if we're on Render (no GPU)
+    is_render = os.environ.get('RENDER', False)
     
     try:
         from ultralytics import YOLO
+        import torch
         import numpy as np
+        
+        # Force CPU mode on Render
+        if is_render:
+            torch.set_num_threads(1)  # Reduce memory usage
+            logger.info("🔧 Running on Render - CPU mode activated with single thread")
         
         # Check if file exists
         if not os.path.exists(MODEL_PATH):
@@ -136,13 +155,14 @@ def load_model():
             MODEL_LOAD_ERROR = error_msg
             return False
         
-        # Load the model
+        # Load the model with minimal memory
         logger.info("🔄 Loading YOLO model...")
         MODEL = YOLO(MODEL_PATH)
         
         # Test the model with a dummy image
         dummy = np.zeros((224, 224, 3), dtype=np.uint8)
         test_result = MODEL.predict(dummy, verbose=False)
+        
         logger.info("✅ Model loaded and validated successfully")
         MODEL_LOAD_ERROR = None
         return True
@@ -378,7 +398,8 @@ async def root():
         "message": "AgroAI API is running",
         "version": "2.0.0",
         "status": "healthy",
-        "docs": "/api/docs"
+        "docs": "/api/docs",
+        "environment": "render" if IS_RENDER else "development"
     }
 
 @app.get("/api/health")
@@ -389,7 +410,9 @@ async def health_check():
         "mongodb": users_collection is not None,
         "model_loaded": MODEL is not None,
         "model_error": MODEL_LOAD_ERROR,
-        "python_version": sys.version
+        "python_version": sys.version,
+        "render_environment": IS_RENDER,
+        "cpu_mode": os.environ.get('CUDA_VISIBLE_DEVICES', 'not_set')
     }
 
 # ══════════════════════════════════════════════
@@ -729,6 +752,6 @@ if __name__ == "__main__":
         "backend:app",
         host=host,
         port=port,
-        reload=True,
+        reload=not IS_RENDER,  # Disable auto-reload on Render
         log_level="info"
     )
