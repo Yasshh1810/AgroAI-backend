@@ -5,9 +5,15 @@ services:
     buildCommand: |
       pip install --upgrade pip
       pip install -r requirements.txt
+      # Download model file from GitHub Releases or cloud storage
+      curl -L -o best.pt "https://github.com/yourusername/agroai/releases/download/v1/best.pt"
+      # OR from Google Drive (use gdown)
+      # pip install gdown && gdown --id YOUR_GOOGLE_DRIVE_FILE_ID -O best.pt
     startCommand: uvicorn backend:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: MONGODB_URI
         sync: false
       - key: PYTHON_VERSION
         value: 3.11.9
+      - key: MODEL_PATH
+        value: best.pt
